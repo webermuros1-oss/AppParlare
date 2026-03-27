@@ -1,8 +1,9 @@
 // Hook principal: maneja mensajes, estado y llamadas a la Groq API
 import { useState, useCallback } from 'react'
+import { DEFAULT_LANG, getSystemPrompt } from '../config/languages'
 
-// System prompt que fuerza inglés básico A1-A2
-const SYSTEM_PROMPT = `You are a friendly English teacher for beginners.
+// System prompt legacy (se reemplaza por getSystemPrompt en el hook)
+const SYSTEM_PROMPT_LEGACY = `You are a friendly English teacher for beginners.
 
 STRICT RULES:
 - ONLY use basic words (A1-A2 level, no advanced vocabulary)
@@ -22,15 +23,21 @@ const GROQ_API_URL = IS_PROD
   : 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'llama-3.1-8b-instant'
 
-// Mensaje de bienvenida inicial
-const WELCOME_MESSAGE = {
-  role: 'assistant',
-  content: "Hello! 👋 I am your English teacher. I will help you learn English. Let's start! How are you today?",
-  id: Date.now(),
+function getWelcome(langCode) {
+  const welcomes = {
+    en: "Hello! I am Sarah, your English teacher. How are you today?",
+    es: "¡Hola! Soy Sarah, tu profesora de español. ¿Cómo te llamas?",
+    de: "Hallo! Ich bin Sarah, deine Deutschlehrerin. Wie heißt du?",
+    zh: "你好！我是Sarah，你的中文老师。你叫什么名字？",
+    cs: "Ahoj! Jsem Sarah, tvoje učitelka češtiny. Jak se jmenuješ?",
+    gl: "Ola! Son Sarah, a túa profesora de galego. Como te chamas?",
+  }
+  return welcomes[langCode] || welcomes.en
 }
 
-export function useChat() {
-  const [messages, setMessages] = useState([WELCOME_MESSAGE])
+export function useChat(langCode = DEFAULT_LANG) {
+  const welcomeMsg = { role: 'assistant', content: getWelcome(langCode), id: Date.now() }
+  const [messages, setMessages] = useState([welcomeMsg])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
 
@@ -56,7 +63,7 @@ export function useChat() {
 
       // Prepara el historial para la API (sin el campo id que es solo interno)
       const apiMessages = [
-        { role: 'system', content: SYSTEM_PROMPT },
+        { role: 'system', content: getSystemPrompt(langCode) },
         ...updatedMessages.map(({ role, content }) => ({ role, content })),
       ]
 
@@ -117,7 +124,7 @@ export function useChat() {
 
   // Limpia el chat y vuelve al mensaje de bienvenida
   const clearChat = useCallback(() => {
-    setMessages([{ ...WELCOME_MESSAGE, id: Date.now() }])
+    setMessages([{ role: 'assistant', content: getWelcome(langCode), id: Date.now() }])
     setError(null)
   }, [])
 

@@ -97,7 +97,7 @@ function VoiceOrb({ state }) {
 }
 
 // ─── Main component ───────────────────────────────────────────────────────────
-export default function VoiceUI() {
+export default function VoiceUI({ langCode }) {
   const {
     convState,
     partialText,
@@ -107,7 +107,7 @@ export default function VoiceUI() {
     start,
     stop,
     STATES,
-  } = useVoiceConversation()
+  } = useVoiceConversation(langCode)
 
   const isActive = convState !== STATES.IDLE
 

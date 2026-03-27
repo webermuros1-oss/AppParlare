@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
+import { LANGUAGES, DEFAULT_LANG, getSystemPrompt } from '../config/languages'
 
 // ─── States ──────────────────────────────────────────────────────────────────
 const STATES = {
@@ -18,34 +19,9 @@ const GROQ_API_URL     = IS_PROD
   : 'https://api.groq.com/openai/v1/chat/completions'
 const BARGE_IN_THRESHOLD = 25
 
-const SYSTEM_PROMPT = `You are Sarah, a warm and patient English teacher for absolute beginners (A1 level).
-
-YOUR TEACHING STYLE:
-- Speak like a real teacher in a one-on-one spoken lesson — natural, clear, encouraging.
-- Use ONLY very simple words. No slang, no idioms, no complex grammar.
-- Keep every response SHORT (2-3 sentences max) — this is a voice conversation.
-- Never use emojis, symbols, or lists — your words will be spoken aloud.
-
-HOW TO TEACH:
-- Start by greeting the student warmly and asking their name and why they want to learn English.
-- Each turn, focus on ONE thing: a word, a phrase, or a small grammar point.
-- Always give an example sentence using the new word or correction.
-- Repeat key words slowly: say them once, use them in a sentence, then invite the student to try.
-- When the student makes a mistake, say: "Good try! We say: [correct version]. Can you try again?"
-- Celebrate every small win: "Perfect!", "Very good!", "That's right!"
-- End each response with ONE simple question to keep the conversation going.
-
-TOPICS FOR BEGINNERS (introduce gradually):
-Greetings, numbers 1-20, colors, family members, days of the week, simple present tense (I am, I have, I like), common verbs (eat, drink, go, see, want), asking for things politely.
-
-STRICT RULES:
-- Maximum 40 words per response (it is a voice conversation — keep it brief).
-- Never use words above A1-A2 level.
-- Never give long explanations — teach by doing and repeating.
-- Always speak in English. If the student speaks another language, gently reply in English only.`
-
 // ─── Hook ────────────────────────────────────────────────────────────────────
-export function useVoiceConversation() {
+export function useVoiceConversation(langCode = DEFAULT_LANG) {
+  const lang = LANGUAGES[langCode] || LANGUAGES[DEFAULT_LANG]
   const [convState,   setConvState]   = useState(STATES.IDLE)
   const [partialText, setPartialText] = useState('')
   const [userText,    setUserText]    = useState('')
@@ -120,7 +96,7 @@ export function useVoiceConversation() {
       headers,
       body: JSON.stringify({
         model:       'llama-3.1-8b-instant',
-        messages:    [{ role: 'system', content: SYSTEM_PROMPT }, ...history],
+        messages:    [{ role: 'system', content: getSystemPrompt(langCode) }, ...history],
         max_tokens:  150,
         temperature: 0.7,
       }),
@@ -135,12 +111,14 @@ export function useVoiceConversation() {
     window.speechSynthesis.cancel()
 
     const utter   = new SpeechSynthesisUtterance(text)
-    utter.lang    = 'en-US'
+    utter.lang    = lang.ttsLang
     utter.rate    = 0.9
 
-    const voices  = window.speechSynthesis.getVoices()
-    const enVoice = voices.find(v => v.lang.startsWith('en-US')) ||
-                    voices.find(v => v.lang.startsWith('en'))
+    const voices    = window.speechSynthesis.getVoices()
+    const langPrefix = lang.ttsLang.split('-')[0]
+    const enVoice   = voices.find(v => v.lang === lang.ttsLang) ||
+                      voices.find(v => v.lang.startsWith(langPrefix)) ||
+                      voices.find(v => v.lang.startsWith('en'))
     if (enVoice) utter.voice = enVoice
 
     let done = false
@@ -257,7 +235,7 @@ export function useVoiceConversation() {
     const dgUrl =
       'wss://api.deepgram.com/v1/listen' +
       '?model=nova-2' +
-      '&language=en-US' +
+      `&language=${lang.deepgramLang}` +
       '&smart_format=true' +
       '&interim_results=true' +
       '&endpointing=500' +

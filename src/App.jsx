@@ -5,7 +5,9 @@ import { useSpeech } from './hooks/useSpeech'
 import ChatMessage from './components/ChatMessage'
 import ChatInput from './components/ChatInput'
 import VoiceUI from './components/VoiceUI'
+import LanguagePicker from './components/LanguagePicker'
 import logo from './public/img/logoParlare.png'
+import { DEFAULT_LANG } from './config/languages'
 
 const EXAMPLE_PROMPTS = [
   'Hello! What is your name?',
@@ -15,9 +17,10 @@ const EXAMPLE_PROMPTS = [
 ]
 
 export default function App() {
-  const [mode, setMode] = useState('voice')   // 'chat' | 'voice'
+  const [mode, setMode] = useState('voice')       // 'chat' | 'voice'
+  const [langCode, setLangCode] = useState(DEFAULT_LANG)
 
-  const { messages, loading, error, sendMessage, clearChat } = useChat()
+  const { messages, loading, error, sendMessage, clearChat } = useChat(langCode)
   const { simplifyText, validateInput }                       = useBasicEnglish()
   const [convoMode, setConvoMode] = useState(false)
   const messagesEndRef = useRef(null)
@@ -123,11 +126,12 @@ export default function App() {
       {/* Spacer para centrar tabs */}
       <div className="w-8" />
     </div>
+    <LanguagePicker selected={langCode} onChange={setLangCode} />
 
-    {mode === 'voice' && <div className="pt-12"><VoiceUI /></div>}
+    {mode === 'voice' && <div className="pt-20"><VoiceUI langCode={langCode} /></div>}
 
     {mode === 'chat' && (
-    <div className="pt-12 parlare-bg flex flex-col items-center justify-center p-4">
+    <div className="pt-20 parlare-bg flex flex-col items-center justify-center p-4">
       <div className="w-full max-w-md parlare-card rounded-3xl shadow-2xl overflow-hidden flex flex-col parlare-glow-purple"
            style={{ height: '90vh', maxHeight: '700px' }}>
 
