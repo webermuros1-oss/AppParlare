@@ -232,21 +232,20 @@ export function useVoiceConversation() {
     streamRef.current = stream
 
     // 3. Connect directly to Deepgram WebSocket (same params the server was using)
-    const dgUrl = [
-      'wss://api.deepgram.com/v1/listen',
-      `?token=${DEEPGRAM_API_KEY}`,
-      '&model=nova-2',
-      '&language=en-US',
-      '&smart_format=true',
-      '&interim_results=true',
-      '&endpointing=500',
-      '&utterance_end_ms=1500',
-      '&vad_events=true',
-    ].join('')
+    // Auth via subprotocol — única forma que funciona en browser (no soporta headers custom)
+    const dgUrl =
+      'wss://api.deepgram.com/v1/listen' +
+      '?model=nova-2' +
+      '&language=en-US' +
+      '&smart_format=true' +
+      '&interim_results=true' +
+      '&endpointing=500' +
+      '&utterance_end_ms=1500' +
+      '&vad_events=true'
 
     let dgWs
     try {
-      dgWs = new WebSocket(dgUrl)
+      dgWs = new WebSocket(dgUrl, ['token', DEEPGRAM_API_KEY])
     } catch (e) {
       setError('Cannot connect to speech service. Check your API key.')
       stream.getTracks().forEach(t => t.stop())
