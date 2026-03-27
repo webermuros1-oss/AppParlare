@@ -40,13 +40,13 @@ export const LANGUAGES = {
     deepgramLang: 'cs',
     ttsLang:     'cs-CZ',
   },
-  gl: {
-    code:        'gl',
-    name:        'Galician',
-    nativeName:  'Galego',
-    flag:        '🏴',
-    deepgramLang: 'gl',   // Deepgram tiene soporte básico; fallback a es si falla
-    ttsLang:     'gl-ES',
+  pt: {
+    code:        'pt',
+    name:        'Portuguese',
+    nativeName:  'Português',
+    flag:        '🇵🇹',
+    deepgramLang: 'pt-BR',
+    ttsLang:     'pt-PT',
   },
 }
 

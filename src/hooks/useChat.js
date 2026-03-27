@@ -30,7 +30,7 @@ function getWelcome(langCode) {
     de: "Hallo! Ich bin Sarah, deine Deutschlehrerin. Wie heißt du?",
     zh: "你好！我是Sarah，你的中文老师。你叫什么名字？",
     cs: "Ahoj! Jsem Sarah, tvoje učitelka češtiny. Jak se jmenuješ?",
-    gl: "Ola! Son Sarah, a túa profesora de galego. Como te chamas?",
+    pt: "Olá! Sou a Sarah, a tua professora de português. Como te chamas?",
   }
   return welcomes[langCode] || welcomes.en
 }
