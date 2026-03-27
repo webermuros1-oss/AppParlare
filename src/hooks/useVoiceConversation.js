@@ -183,7 +183,7 @@ export function useVoiceConversation() {
     try {
       ws = new WebSocket(WS_URL)
     } catch (e) {
-      setError('Cannot connect to server. Run: cd server && npm start')
+      setError('Cannot connect to server. Please try again in a few seconds.')
       stream.getTracks().forEach(t => t.stop())
       setConvState(STATES.IDLE)
       return
@@ -192,7 +192,7 @@ export function useVoiceConversation() {
     ws.binaryType = 'arraybuffer'
 
     ws.onerror = () => {
-      setError('Cannot connect to server. Run: cd server && npm start')
+      setError('Cannot connect to server. Please try again in a few seconds.')
       setConvState(STATES.IDLE)
     }
 

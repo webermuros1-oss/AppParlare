@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: parlare-backend
+    runtime: node
+    rootDir: server
+    buildCommand: npm install --omit=dev
+    startCommand: npm start
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DEEPGRAM_API_KEY
+        sync: false          # lo introduces manualmente en el dashboard de Render
+      - key: GROQ_API_KEY
+        sync: false
+      - key: ALLOWED_ORIGIN
+        sync: false          # pondrás aquí la URL de Vercel una vez deployado
