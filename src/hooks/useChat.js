@@ -14,8 +14,12 @@ STRICT RULES:
 - NEVER use complex words like: utilize, commence, facilitate, subsequently, etc.
 - Speak as if talking to a 10-year-old learning English for the first time`
 
-// URL de la API de Groq (compatible con formato OpenAI)
-const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
+// En producción usamos la función serverless de Vercel (key segura en servidor)
+// En local llamamos a Groq directamente con VITE_GROQ_API_KEY
+const IS_PROD = import.meta.env.PROD
+const GROQ_API_URL = IS_PROD
+  ? '/api/chat'
+  : 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'llama-3.1-8b-instant'
 
 // Mensaje de bienvenida inicial
@@ -45,8 +49,8 @@ export function useChat() {
     setLoading(true)
 
     try {
-      // Verifica que existe la API key
-      if (!apiKey || apiKey === 'your_groq_api_key_here') {
+      // Verifica que existe la API key (solo necesaria en local)
+      if (!IS_PROD && (!apiKey || apiKey === 'your_groq_api_key_here')) {
         throw new Error('API_KEY_MISSING')
       }
 
@@ -56,18 +60,18 @@ export function useChat() {
         ...updatedMessages.map(({ role, content }) => ({ role, content })),
       ]
 
-      // Llamada a la API de Groq
+      // Llamada a Groq — directa en local, via serverless en producción
+      const headers = { 'Content-Type': 'application/json' }
+      if (!IS_PROD) headers['Authorization'] = `Bearer ${apiKey}`
+
       const response = await fetch(GROQ_API_URL, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`,
-        },
+        headers,
         body: JSON.stringify({
           model: MODEL,
           messages: apiMessages,
-          max_tokens: 200,      // Respuestas cortas para nivel básico
-          temperature: 0.7,     // Algo de variedad pero consistente
+          max_tokens: 200,
+          temperature: 0.7,
         }),
       })
 

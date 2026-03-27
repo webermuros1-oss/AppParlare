@@ -12,7 +12,10 @@ const STATES = {
 // ─── Constants ───────────────────────────────────────────────────────────────
 const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY
 const GROQ_API_KEY     = import.meta.env.VITE_GROQ_API_KEY
-const GROQ_API_URL     = 'https://api.groq.com/openai/v1/chat/completions'
+const IS_PROD          = import.meta.env.PROD
+const GROQ_API_URL     = IS_PROD
+  ? '/api/chat'
+  : 'https://api.groq.com/openai/v1/chat/completions'
 const BARGE_IN_THRESHOLD = 25
 
 const SYSTEM_PROMPT = `You are Sarah, a warm and patient English teacher for absolute beginners (A1 level).
@@ -109,12 +112,12 @@ export function useVoiceConversation() {
 
   // ─── Groq API (direct fetch, same pattern as useChat) ────────────────────
   async function callGroq(history) {
+    const headers = { 'Content-Type': 'application/json' }
+    if (!IS_PROD) headers['Authorization'] = `Bearer ${GROQ_API_KEY}`
+
     const res = await fetch(GROQ_API_URL, {
       method: 'POST',
-      headers: {
-        'Content-Type':  'application/json',
-        'Authorization': `Bearer ${GROQ_API_KEY}`,
-      },
+      headers,
       body: JSON.stringify({
         model:       'llama-3.1-8b-instant',
         messages:    [{ role: 'system', content: SYSTEM_PROMPT }, ...history],
