@@ -28,6 +28,14 @@ export function useVoiceConversation(langCode = DEFAULT_LANG) {
   const [aiText,      setAiText]      = useState('')
   const [error,       setError]       = useState(null)
 
+  // Keep refs in sync so memoized callbacks always read the latest language
+  const langCodeRef = useRef(langCode)
+  const langRef     = useRef(lang)
+  useEffect(() => {
+    langCodeRef.current = langCode
+    langRef.current     = LANGUAGES[langCode] || LANGUAGES[DEFAULT_LANG]
+  }, [langCode])
+
   // Refs — no server WebSocket anymore, connect directly to Deepgram
   const dgWsRef       = useRef(null)   // Deepgram WebSocket
   const recorderRef   = useRef(null)
@@ -96,7 +104,7 @@ export function useVoiceConversation(langCode = DEFAULT_LANG) {
       headers,
       body: JSON.stringify({
         model:       'llama-3.1-8b-instant',
-        messages:    [{ role: 'system', content: getSystemPrompt(langCode) }, ...history],
+        messages:    [{ role: 'system', content: getSystemPrompt(langCodeRef.current) }, ...history],
         max_tokens:  150,
         temperature: 0.7,
       }),
@@ -110,13 +118,14 @@ export function useVoiceConversation(langCode = DEFAULT_LANG) {
   const speakText = useCallback((text) => {
     window.speechSynthesis.cancel()
 
+    const currentLang = langRef.current
     const utter   = new SpeechSynthesisUtterance(text)
-    utter.lang    = lang.ttsLang
+    utter.lang    = currentLang.ttsLang
     utter.rate    = 0.9
 
     const voices    = window.speechSynthesis.getVoices()
-    const langPrefix = lang.ttsLang.split('-')[0]
-    const enVoice   = voices.find(v => v.lang === lang.ttsLang) ||
+    const langPrefix = currentLang.ttsLang.split('-')[0]
+    const enVoice   = voices.find(v => v.lang === currentLang.ttsLang) ||
                       voices.find(v => v.lang.startsWith(langPrefix)) ||
                       voices.find(v => v.lang.startsWith('en'))
     if (enVoice) utter.voice = enVoice
@@ -235,7 +244,7 @@ export function useVoiceConversation(langCode = DEFAULT_LANG) {
     const dgUrl =
       'wss://api.deepgram.com/v1/listen' +
       '?model=nova-2' +
-      `&language=${lang.deepgramLang}` +
+      `&language=${langRef.current.deepgramLang}` +
       '&smart_format=true' +
       '&interim_results=true' +
       '&endpointing=500' +
