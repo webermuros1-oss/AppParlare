@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="es">
+  <head>
+    <meta charset="UTF-8" />
+
+    <!-- PWA & móvil -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Parlare" />
+    <meta name="theme-color" content="#0F0F1A" />
+    <meta name="description" content="Practica idiomas con IA en tiempo real" />
+
+    <!-- Iconos Apple -->
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <title>Parlare – Habla idiomas de verdad</title>
+
+    <!-- TailwindCSS via CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+      tailwind.config = {
+        theme: {
+          extend: {
+            colors: {
+              primary: '#FF6B00',
+              secondary: '#7B2FFF',
+            }
+          }
+        }
+      }
+    </script>
+  </head>
+  <body class="bg-[#0F0F1A]">
+    <div id="root"></div>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>
