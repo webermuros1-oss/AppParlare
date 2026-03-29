@@ -1,100 +1,42 @@
+// Voice conversation — SpeechRecognition + Groq + Web Speech TTS
+// Mobile-safe: polling for TTS end, fresh recognition per turn, keepalive for Android
 import { useState, useRef, useCallback, useEffect } from 'react'
-import { LANGUAGES, DEFAULT_LANG, getSystemPrompt } from '../config/languages'
+import { getSystemPrompt } from '../config/languages'
 
-// ─── States ──────────────────────────────────────────────────────────────────
-const STATES = {
-  IDLE:        'idle',
-  CONNECTING:  'connecting',
-  LISTENING:   'listening',
-  PROCESSING:  'processing',
-  SPEAKING:    'speaking',
+export const STATES = {
+  IDLE:       'idle',
+  LISTENING:  'listening',
+  PROCESSING: 'processing',
+  SPEAKING:   'speaking',
 }
 
-// ─── Constants ───────────────────────────────────────────────────────────────
-const DEEPGRAM_API_KEY = import.meta.env.VITE_DEEPGRAM_API_KEY
-const GROQ_API_KEY     = import.meta.env.VITE_GROQ_API_KEY
-const IS_PROD          = import.meta.env.PROD
-const GROQ_API_URL     = IS_PROD
+const GROQ_API_KEY = import.meta.env.VITE_GROQ_API_KEY
+const IS_PROD      = import.meta.env.PROD
+const GROQ_API_URL = IS_PROD
   ? '/api/chat'
   : 'https://api.groq.com/openai/v1/chat/completions'
-const BARGE_IN_THRESHOLD = 25
+const MAX_HISTORY  = 50
 
-// ─── Hook ────────────────────────────────────────────────────────────────────
-export function useVoiceConversation(langCode = DEFAULT_LANG) {
-  const lang = LANGUAGES[langCode] || LANGUAGES[DEFAULT_LANG]
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition
+
+export function useVoiceConversation() {
   const [convState,   setConvState]   = useState(STATES.IDLE)
   const [partialText, setPartialText] = useState('')
   const [userText,    setUserText]    = useState('')
   const [aiText,      setAiText]      = useState('')
   const [error,       setError]       = useState(null)
 
-  // Keep refs in sync so memoized callbacks always read the latest language
-  const langCodeRef = useRef(langCode)
-  const langRef     = useRef(lang)
-  useEffect(() => {
-    langCodeRef.current = langCode
-    langRef.current     = LANGUAGES[langCode] || LANGUAGES[DEFAULT_LANG]
-  }, [langCode])
+  const historyRef   = useRef([])
+  const activeRef    = useRef(false)
+  const listeningRef = useRef(false)
 
-  // Refs — no server WebSocket anymore, connect directly to Deepgram
-  const dgWsRef       = useRef(null)   // Deepgram WebSocket
-  const recorderRef   = useRef(null)
-  const streamRef     = useRef(null)
-  const animFrameRef  = useRef(null)
-  const convStateRef  = useRef(STATES.IDLE)
-  const analyserRef   = useRef(null)
-  const audioCtxRef   = useRef(null)
-  const isMutedRef    = useRef(false)           // true while AI speaks → ignore Deepgram
-  const pendingRef    = useRef('')              // accumulates final transcript chunks
-  const historyRef    = useRef([])             // conversation history for Groq
+  // TTS timers — need refs to clear from anywhere
+  const ttsPollRef   = useRef(null)
+  const ttsKeepAlive = useRef(null)
+  const ttsSafety    = useRef(null)
+  const ttsDoneRef   = useRef(false)
 
-  // Keep convStateRef in sync
-  useEffect(() => { convStateRef.current = convState }, [convState])
-
-  // ─── VAD (barge-in detection) ─────────────────────────────────────────────
-  function startVAD(stream) {
-    try {
-      const ctx      = new (window.AudioContext || window.webkitAudioContext)()
-      const source   = ctx.createMediaStreamSource(stream)
-      const analyser = ctx.createAnalyser()
-      analyser.fftSize = 256
-      source.connect(analyser)
-      audioCtxRef.current  = ctx
-      analyserRef.current  = analyser
-
-      const dataArr = new Uint8Array(analyser.frequencyBinCount)
-
-      function loop() {
-        animFrameRef.current = requestAnimationFrame(loop)
-        analyser.getByteFrequencyData(dataArr)
-        const avg = dataArr.reduce((s, v) => s + v, 0) / dataArr.length
-
-        // User speaks while AI talking → barge-in
-        if (convStateRef.current === STATES.SPEAKING && avg > BARGE_IN_THRESHOLD) {
-          window.speechSynthesis.cancel()
-          isMutedRef.current = false
-          setConvState(STATES.LISTENING)
-        }
-      }
-      loop()
-    } catch (e) {
-      console.warn('[VAD] Could not start AudioContext:', e)
-    }
-  }
-
-  function stopVAD() {
-    if (animFrameRef.current) {
-      cancelAnimationFrame(animFrameRef.current)
-      animFrameRef.current = null
-    }
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {})
-      audioCtxRef.current = null
-    }
-    analyserRef.current = null
-  }
-
-  // ─── Groq API (direct fetch, same pattern as useChat) ────────────────────
+  // ── Groq API ──────────────────────────────────────────────────────────────
   async function callGroq(history) {
     const headers = { 'Content-Type': 'application/json' }
     if (!IS_PROD) headers['Authorization'] = `Bearer ${GROQ_API_KEY}`
@@ -104,252 +46,206 @@ export function useVoiceConversation(langCode = DEFAULT_LANG) {
       headers,
       body: JSON.stringify({
         model:       'llama-3.1-8b-instant',
-        messages:    [{ role: 'system', content: getSystemPrompt(langCodeRef.current) }, ...history],
-        max_tokens:  150,
+        messages:    [{ role: 'system', content: getSystemPrompt() }, ...history.slice(-MAX_HISTORY)],
+        max_tokens:  80,
         temperature: 0.7,
       }),
     })
-    if (!res.ok) throw new Error(`Groq HTTP ${res.status}`)
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
     const data = await res.json()
     return data.choices?.[0]?.message?.content ?? ''
   }
 
-  // ─── speakText (Web Speech API) ───────────────────────────────────────────
-  const speakText = useCallback((text) => {
-    window.speechSynthesis.cancel()
+  // ── Clear all TTS timers ──────────────────────────────────────────────────
+  function clearTtsTimers() {
+    clearInterval(ttsPollRef.current)
+    clearInterval(ttsKeepAlive.current)
+    clearTimeout(ttsSafety.current)
+  }
 
-    const currentLang = langRef.current
-    const utter   = new SpeechSynthesisUtterance(text)
-    utter.lang    = currentLang.ttsLang
-    utter.rate    = 0.9
+  // ── Start a fresh recognition session ────────────────────────────────────
+  // Creates a new instance every time — reusing the same object causes issues on mobile
+  function startRecognition() {
+    if (!SR || !activeRef.current) return
 
-    const voices    = window.speechSynthesis.getVoices()
-    const langPrefix = currentLang.ttsLang.split('-')[0]
-    const enVoice   = voices.find(v => v.lang === currentLang.ttsLang) ||
-                      voices.find(v => v.lang.startsWith(langPrefix)) ||
-                      voices.find(v => v.lang.startsWith('en'))
-    if (enVoice) utter.voice = enVoice
+    const rec = new SR()
+    rec.lang            = 'en-US'
+    rec.continuous      = false   // one utterance per session; we restart in onend
+    rec.interimResults  = true
+    rec.maxAlternatives = 1
 
-    let done = false
-    function handleDone() {
-      if (done) return
-      done = true
-      isMutedRef.current = false
-      setConvState(STATES.LISTENING)
+    rec.onresult = (e) => {
+      const transcript = Array.from(e.results).map(r => r[0].transcript).join('')
+      if (e.results[e.results.length - 1].isFinal) {
+        if (transcript.trim()) {
+          setUserText(transcript)
+          setPartialText('')
+          processUserTurn(transcript)
+        }
+      } else {
+        setPartialText(transcript)
+      }
     }
 
-    const safetyTimer = setTimeout(() => {
-      if (convStateRef.current === STATES.SPEAKING) {
-        window.speechSynthesis.cancel()
-        handleDone()
+    rec.onerror = (e) => {
+      if (!activeRef.current) return
+      if (e.error === 'no-speech' || e.error === 'aborted') return  // normal, onend will restart
+      if (e.error === 'not-allowed') {
+        setError('Microphone blocked. Please allow microphone access and refresh.')
+        activeRef.current = false
+        setConvState(STATES.IDLE)
+        return
       }
-    }, 15000)
+      if (e.error === 'network') {
+        setError('Network error. Check your connection.')
+      }
+    }
 
-    utter.onend   = () => { clearTimeout(safetyTimer); handleDone() }
-    utter.onerror = () => { clearTimeout(safetyTimer); handleDone() }
+    rec.onend = () => {
+      // Auto-restart only when we should be listening (not while processing or speaking)
+      if (listeningRef.current && activeRef.current) {
+        setTimeout(() => {
+          if (listeningRef.current && activeRef.current) startRecognition()
+        }, 150)
+      }
+    }
 
-    isMutedRef.current = true
+    try {
+      rec.start()
+    } catch {
+      // start() can throw if called too fast — retry after a short delay
+      if (listeningRef.current && activeRef.current) {
+        setTimeout(() => startRecognition(), 400)
+      }
+    }
+  }
+
+  // ── TTS with full mobile compatibility ────────────────────────────────────
+  function speakText(text) {
+    window.speechSynthesis.cancel()
+    clearTtsTimers()
+    ttsDoneRef.current = false
+
+    const utter  = new SpeechSynthesisUtterance(text)
+    utter.lang   = 'en-US'
+    utter.rate   = 0.9
+    utter.pitch  = 1
+    utter.volume = 1
+
+    const applyVoice = () => {
+      const voices = window.speechSynthesis.getVoices()
+      const voice  = voices.find(v => v.lang === 'en-US') ||
+                     voices.find(v => v.lang.startsWith('en'))
+      if (voice) utter.voice = voice
+    }
+    applyVoice()
+
+    const onDone = () => {
+      if (ttsDoneRef.current) return
+      ttsDoneRef.current = true
+      clearTtsTimers()
+      if (!activeRef.current) return
+      listeningRef.current = true
+      setConvState(STATES.LISTENING)
+      // Short delay so mobile browser releases audio before opening mic
+      setTimeout(() => {
+        if (activeRef.current && listeningRef.current) startRecognition()
+      }, 400)
+    }
+
+    // 1. Standard events (work on desktop, sometimes on mobile)
+    utter.onend   = onDone
+    utter.onerror = onDone
+
+    // 2. Polling fallback every 250ms — catches Android Chrome where onend doesn't fire
+    ttsPollRef.current = setInterval(() => {
+      if (!window.speechSynthesis.speaking) onDone()
+    }, 250)
+
+    // 3. Android Chrome 15s bug — synthesis silently pauses after 15s
+    //    Fix: pause + resume every 10s to keep it alive
+    ttsKeepAlive.current = setInterval(() => {
+      if (window.speechSynthesis.speaking) {
+        window.speechSynthesis.pause()
+        window.speechSynthesis.resume()
+      }
+    }, 10000)
+
+    // 4. Hard safety timeout (~100ms per char, min 3s, max 12s)
+    const safetyMs = Math.min(Math.max(text.length * 100, 3000), 12000)
+    ttsSafety.current = setTimeout(onDone, safetyMs)
+
+    listeningRef.current = false
     setConvState(STATES.SPEAKING)
-    window.speechSynthesis.speak(utter)
-  }, [])
 
-  // ─── processUserTurn ──────────────────────────────────────────────────────
+    // On mobile, voices may not be loaded yet when speakText is called
+    if (window.speechSynthesis.getVoices().length > 0) {
+      window.speechSynthesis.speak(utter)
+    } else {
+      window.speechSynthesis.addEventListener('voiceschanged', () => {
+        applyVoice()
+        window.speechSynthesis.speak(utter)
+      }, { once: true })
+    }
+  }
+
+  // ── Process one user turn ─────────────────────────────────────────────────
   async function processUserTurn(text) {
-    if (!text.trim()) return
-
+    if (!text.trim() || !activeRef.current) return
+    listeningRef.current = false
     setConvState(STATES.PROCESSING)
     historyRef.current.push({ role: 'user', content: text })
 
-    let response = ''
     try {
-      response = await callGroq(historyRef.current)
-    } catch (err) {
-      console.error('[Groq] Error:', err.message)
+      const response = await callGroq(historyRef.current)
+      if (!activeRef.current) return
+      historyRef.current.push({ role: 'assistant', content: response })
+      setAiText(response)
+      speakText(response)
+    } catch {
+      if (!activeRef.current) return
       setError('Could not reach AI. Check your connection.')
+      listeningRef.current = true
       setConvState(STATES.LISTENING)
-      isMutedRef.current = false
+      setTimeout(() => startRecognition(), 300)
+    }
+  }
+
+  // ── Start session ─────────────────────────────────────────────────────────
+  const start = useCallback(() => {
+    if (!SR) {
+      setError('Voice mode requires Chrome or Edge browser.')
+      return
+    }
+    if (!IS_PROD && !GROQ_API_KEY) {
+      setError('VITE_GROQ_API_KEY not set in .env file.')
       return
     }
 
-    historyRef.current.push({ role: 'assistant', content: response })
-    setAiText(response)
-    speakText(response)
-  }
+    setError(null)
+    setPartialText('')
+    setUserText('')
+    setAiText('')
+    historyRef.current   = []
+    activeRef.current    = true
+    listeningRef.current = true
 
-  // ─── stop ─────────────────────────────────────────────────────────────────
+    setConvState(STATES.LISTENING)
+    startRecognition()
+  }, [])
+
+  // ── Stop session ──────────────────────────────────────────────────────────
   const stop = useCallback(() => {
+    activeRef.current    = false
+    listeningRef.current = false
+    clearTtsTimers()
     window.speechSynthesis.cancel()
-    stopVAD()
-
-    if (recorderRef.current && recorderRef.current.state !== 'inactive') {
-      recorderRef.current.stop()
-    }
-    recorderRef.current = null
-
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(t => t.stop())
-      streamRef.current = null
-    }
-
-    if (dgWsRef.current) {
-      try { dgWsRef.current.close() } catch (_) {}
-      dgWsRef.current = null
-    }
-
-    historyRef.current    = []
-    isMutedRef.current    = false
-    pendingRef.current    = ''
+    historyRef.current = []
     setConvState(STATES.IDLE)
     setPartialText('')
   }, [])
 
-  // ─── start ────────────────────────────────────────────────────────────────
-  const start = useCallback(async () => {
-    setError(null)
-    setConvState(STATES.CONNECTING)
-    setPartialText('')
-    setUserText('')
-    setAiText('')
-    historyRef.current = []
-    isMutedRef.current = false
-    pendingRef.current = ''
-
-    // 1. Check API keys
-    if (!DEEPGRAM_API_KEY) {
-      setError('VITE_DEEPGRAM_API_KEY not configured.')
-      setConvState(STATES.IDLE)
-      return
-    }
-    if (!GROQ_API_KEY) {
-      setError('VITE_GROQ_API_KEY not configured.')
-      setConvState(STATES.IDLE)
-      return
-    }
-
-    // 2. Get microphone
-    let stream
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({
-        audio: { echoCancellation: true, noiseSuppression: true, channelCount: 1 },
-      })
-    } catch (e) {
-      setError('Microphone access denied. Please allow microphone and try again.')
-      setConvState(STATES.IDLE)
-      return
-    }
-    streamRef.current = stream
-
-    // 3. Connect directly to Deepgram WebSocket (same params the server was using)
-    // Auth via subprotocol — única forma que funciona en browser (no soporta headers custom)
-    const dgUrl =
-      'wss://api.deepgram.com/v1/listen' +
-      '?model=nova-2' +
-      `&language=${langRef.current.deepgramLang}` +
-      '&smart_format=true' +
-      '&interim_results=true' +
-      '&endpointing=500' +
-      '&utterance_end_ms=1500' +
-      '&vad_events=true'
-
-    let dgWs
-    try {
-      dgWs = new WebSocket(dgUrl, ['token', DEEPGRAM_API_KEY])
-    } catch (e) {
-      setError('Cannot connect to speech service. Check your API key.')
-      stream.getTracks().forEach(t => t.stop())
-      setConvState(STATES.IDLE)
-      return
-    }
-    dgWsRef.current  = dgWs
-    dgWs.binaryType  = 'arraybuffer'
-
-    dgWs.onerror = () => {
-      setError('Speech service error. Please check your Deepgram API key.')
-      setConvState(STATES.IDLE)
-    }
-
-    dgWs.onclose = () => {
-      if (convStateRef.current !== STATES.IDLE) setConvState(STATES.IDLE)
-    }
-
-    // 4. Handle Deepgram messages (same logic the server had)
-    dgWs.onmessage = (event) => {
-      let msg
-      try { msg = JSON.parse(event.data) } catch { return }
-
-      // UtteranceEnd fallback
-      if (msg.type === 'UtteranceEnd') {
-        if (isMutedRef.current) return
-        if (pendingRef.current.trim()) {
-          const toProcess   = pendingRef.current
-          pendingRef.current = ''
-          processUserTurn(toProcess)
-        }
-        return
-      }
-
-      // Transcript event
-      const alt        = msg?.channel?.alternatives?.[0]
-      if (!alt) return
-
-      const text       = alt.transcript ?? ''
-      const isFinal    = msg.is_final   ?? false
-      const speechFinal = msg.speech_final ?? false
-
-      if (isMutedRef.current) return
-
-      if (!isFinal) {
-        if (text) setPartialText(text)
-        return
-      }
-
-      // Final transcript chunk
-      if (text.trim()) {
-        pendingRef.current = (pendingRef.current + ' ' + text).trim()
-        setUserText(pendingRef.current)
-        setPartialText('')
-      }
-
-      if (speechFinal && pendingRef.current.trim()) {
-        const toProcess   = pendingRef.current
-        pendingRef.current = ''
-        processUserTurn(toProcess)
-      }
-    }
-
-    // 5. On open → start MediaRecorder + VAD
-    dgWs.onopen = () => {
-      setConvState(STATES.LISTENING)
-
-      const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-        ? 'audio/webm;codecs=opus'
-        : 'audio/webm'
-
-      let recorder
-      try {
-        recorder = new MediaRecorder(stream, { mimeType })
-      } catch (e) {
-        setError('MediaRecorder not supported in this browser.')
-        dgWs.close()
-        stream.getTracks().forEach(t => t.stop())
-        setConvState(STATES.IDLE)
-        return
-      }
-      recorderRef.current = recorder
-
-      recorder.ondataavailable = (e) => {
-        if (e.data?.size > 0 && dgWs.readyState === WebSocket.OPEN && !isMutedRef.current) {
-          dgWs.send(e.data)
-        }
-      }
-
-      recorder.start(100)  // chunk every 100ms
-      startVAD(stream)
-    }
-  }, [speakText])
-
-  // Cleanup on unmount
-  useEffect(() => { return () => { stop() } }, [stop])
+  useEffect(() => () => { stop() }, [stop])
 
   return { convState, partialText, userText, aiText, error, start, stop, STATES }
 }

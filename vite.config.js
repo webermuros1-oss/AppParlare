@@ -9,9 +9,9 @@ export default defineConfig({
       registerType: 'autoUpdate',
       includeAssets: ['icon-192.png', 'icon-512.png', 'apple-touch-icon.png'],
       manifest: {
-        name: 'Parlare – Habla idiomas de verdad',
+        name: 'Parlare – Learn English with AI',
         short_name: 'Parlare',
-        description: 'Practica idiomas con IA en tiempo real',
+        description: 'Practice English conversation with AI',
         theme_color: '#FF6B00',
         background_color: '#0F0F1A',
         display: 'standalone',
@@ -34,23 +34,22 @@ export default defineConfig({
         ],
       },
       workbox: {
-        // Cache shell (JS, CSS, HTML)
         globPatterns: ['**/*.{js,css,html,ico,png,svg,woff2}'],
-        // Rutas de API siempre van a red
         navigateFallback: '/',
+        // Force new SW to activate immediately — fixes stale cache on mobile PWA
+        skipWaiting: true,
+        clientsClaim: true,
         runtimeCaching: [
           {
-            // Assets estáticos → cache first
             urlPattern: /\.(?:png|jpg|jpeg|svg|gif|webp|ico|woff2?)$/i,
             handler: 'CacheFirst',
             options: {
-              cacheName: 'parlare-assets',
+              cacheName: 'parlare-assets-v2',
               expiration: { maxEntries: 60, maxAgeSeconds: 60 * 60 * 24 * 30 },
             },
           },
           {
-            // APIs externas (Groq, Deepgram) → network only, sin caché
-            urlPattern: /^https:\/\/(api\.groq\.com|api\.deepgram\.com)/,
+            urlPattern: /^https:\/\/api\.groq\.com/,
             handler: 'NetworkOnly',
           },
         ],

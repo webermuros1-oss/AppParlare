@@ -10,7 +10,7 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: 'GROQ_API_KEY not configured on server' })
   }
 
-  const { messages, max_tokens = 200 } = req.body
+  const { messages, max_tokens = 200, stream = false } = req.body
 
   try {
     const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -24,16 +24,28 @@ export default async function handler(req, res) {
         messages,
         max_tokens,
         temperature: 0.7,
+        stream,
       }),
     })
 
-    const data = await response.json()
-
     if (!response.ok) {
+      const data = await response.json()
       return res.status(response.status).json(data)
     }
 
-    return res.status(200).json(data)
+    if (stream) {
+      // Retransmite el stream SSE de Groq directamente al cliente
+      res.setHeader('Content-Type', 'text/event-stream')
+      res.setHeader('Cache-Control', 'no-cache')
+      res.setHeader('Connection', 'keep-alive')
+      for await (const chunk of response.body) {
+        res.write(chunk)
+      }
+      res.end()
+    } else {
+      const data = await response.json()
+      return res.status(200).json(data)
+    }
   } catch (err) {
     return res.status(500).json({ error: err.message })
   }

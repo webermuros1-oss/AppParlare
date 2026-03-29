@@ -1,19 +1,6 @@
 // Hook principal: maneja mensajes, estado y llamadas a la Groq API
-import { useState, useCallback } from 'react'
-import { DEFAULT_LANG, getSystemPrompt } from '../config/languages'
-
-// System prompt legacy (se reemplaza por getSystemPrompt en el hook)
-const SYSTEM_PROMPT_LEGACY = `You are a friendly English teacher for beginners.
-
-STRICT RULES:
-- ONLY use basic words (A1-A2 level, no advanced vocabulary)
-- Write SHORT sentences (max 10 words each)
-- Use simple grammar: present simple, past simple, basic future
-- If the user makes a grammar mistake, correct it GENTLY with: "Good try! We say: [correct version]"
-- Always encourage the user with positive words
-- Ask ONE simple question at the end to keep conversation going
-- NEVER use complex words like: utilize, commence, facilitate, subsequently, etc.
-- Speak as if talking to a 10-year-old learning English for the first time`
+import { useState, useCallback, useRef, useEffect } from 'react'
+import { getSystemPrompt } from '../config/languages'
 
 // En producción usamos la función serverless de Vercel (key segura en servidor)
 // En local llamamos a Groq directamente con VITE_GROQ_API_KEY
@@ -22,24 +9,20 @@ const GROQ_API_URL = IS_PROD
   ? '/api/chat'
   : 'https://api.groq.com/openai/v1/chat/completions'
 const MODEL = 'llama-3.1-8b-instant'
+// Máximo de mensajes enviados a la API (el historial visible no se toca)
+const MAX_API_MESSAGES = 50
 
-function getWelcome(langCode) {
-  const welcomes = {
-    en: "Hello! I am Sarah, your English teacher. How are you today?",
-    es: "¡Hola! Soy Sarah, tu profesora de español. ¿Cómo te llamas?",
-    de: "Hallo! Ich bin Sarah, deine Deutschlehrerin. Wie heißt du?",
-    zh: "你好！我是Sarah，你的中文老师。你叫什么名字？",
-    cs: "Ahoj! Jsem Sarah, tvoje učitelka češtiny. Jak se jmenuješ?",
-    pt: "Olá! Sou a Sarah, a tua professora de português. Como te chamas?",
-  }
-  return welcomes[langCode] || welcomes.en
-}
+const WELCOME = "Hello! I am Sarah, your English teacher. How are you today?"
 
-export function useChat(langCode = DEFAULT_LANG) {
-  const welcomeMsg = { role: 'assistant', content: getWelcome(langCode), id: Date.now() }
+export function useChat() {
+  const welcomeMsg = { role: 'assistant', content: WELCOME, id: Date.now() }
   const [messages, setMessages] = useState([welcomeMsg])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
+
+  // Ref para evitar stale closure: siempre lee el historial más reciente
+  const messagesRef = useRef(messages)
+  useEffect(() => { messagesRef.current = messages }, [messages])
 
   // Obtiene la API key desde variables de entorno de Vite
   const apiKey = import.meta.env.VITE_GROQ_API_KEY
@@ -49,11 +32,13 @@ export function useChat(langCode = DEFAULT_LANG) {
 
     setError(null)
 
-    // Añade mensaje del usuario al historial
+    // Lee el historial fresco desde el ref (evita stale closure)
     const userMessage = { role: 'user', content: userText.trim(), id: Date.now() }
-    const updatedMessages = [...messages, userMessage]
+    const updatedMessages = [...messagesRef.current, userMessage]
     setMessages(updatedMessages)
     setLoading(true)
+
+    let assistantId = null
 
     try {
       // Verifica que existe la API key (solo necesaria en local)
@@ -61,10 +46,11 @@ export function useChat(langCode = DEFAULT_LANG) {
         throw new Error('API_KEY_MISSING')
       }
 
-      // Prepara el historial para la API (sin el campo id que es solo interno)
+      // Limita los mensajes enviados a la API a los últimos MAX_API_MESSAGES
+      const recentMessages = updatedMessages.slice(-MAX_API_MESSAGES)
       const apiMessages = [
-        { role: 'system', content: getSystemPrompt(langCode) },
-        ...updatedMessages.map(({ role, content }) => ({ role, content })),
+        { role: 'system', content: getSystemPrompt() },
+        ...recentMessages.map(({ role, content }) => ({ role, content })),
       ]
 
       // Llamada a Groq — directa en local, via serverless en producción
@@ -79,6 +65,7 @@ export function useChat(langCode = DEFAULT_LANG) {
           messages: apiMessages,
           max_tokens: 200,
           temperature: 0.7,
+          stream: true,
         }),
       })
 
@@ -87,21 +74,38 @@ export function useChat(langCode = DEFAULT_LANG) {
         throw new Error(errData?.error?.message || `HTTP ${response.status}`)
       }
 
-      const data = await response.json()
-      const assistantText = data.choices?.[0]?.message?.content
+      // Inserta mensaje vacío del asistente y lo rellena token a token
+      assistantId = Date.now() + 1
+      setMessages(prev => [...prev, { role: 'assistant', content: '', id: assistantId }])
+
+      const reader = response.body.getReader()
+      const decoder = new TextDecoder()
+      let assistantText = ''
+
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = decoder.decode(value, { stream: true })
+        for (const line of chunk.split('\n')) {
+          if (line.startsWith('data: ') && !line.includes('[DONE]')) {
+            try {
+              const delta = JSON.parse(line.slice(6)).choices?.[0]?.delta?.content || ''
+              if (delta) {
+                assistantText += delta
+                setMessages(prev => prev.map(m =>
+                  m.id === assistantId ? { ...m, content: assistantText } : m
+                ))
+              }
+            } catch { /* chunk incompleto, ignorar */ }
+          }
+        }
+      }
 
       if (!assistantText) throw new Error('Empty response from API')
 
-      // Añade respuesta del asistente
-      const assistantMessage = {
-        role: 'assistant',
-        content: assistantText,
-        id: Date.now() + 1,
-      }
-      setMessages(prev => [...prev, assistantMessage])
-
     } catch (err) {
-      // Manejo de errores con mensajes claros en español
+      // Error handling
       let errorMsg = 'Something went wrong. Try again!'
 
       if (err.message === 'API_KEY_MISSING') {
@@ -115,16 +119,16 @@ export function useChat(langCode = DEFAULT_LANG) {
       }
 
       setError(errorMsg)
-      // Elimina el mensaje del usuario si hubo error (para que pueda intentar de nuevo)
-      setMessages(prev => prev.filter(m => m.id !== userMessage.id))
+      // Elimina el mensaje del usuario (y el del asistente vacío si se creó) para reintentar
+      setMessages(prev => prev.filter(m => m.id !== userMessage.id && m.id !== assistantId))
     } finally {
       setLoading(false)
     }
-  }, [messages, loading, apiKey])
+  }, [loading, apiKey])
 
   // Limpia el chat y vuelve al mensaje de bienvenida
   const clearChat = useCallback(() => {
-    setMessages([{ role: 'assistant', content: getWelcome(langCode), id: Date.now() }])
+    setMessages([{ role: 'assistant', content: WELCOME, id: Date.now() }])
     setError(null)
   }, [])
 

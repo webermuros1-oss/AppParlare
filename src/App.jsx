@@ -5,9 +5,7 @@ import { useSpeech } from './hooks/useSpeech'
 import ChatMessage from './components/ChatMessage'
 import ChatInput from './components/ChatInput'
 import VoiceUI from './components/VoiceUI'
-import LanguagePicker from './components/LanguagePicker'
 import logo from './public/img/logoParlare.png'
-import { DEFAULT_LANG, LANGUAGES } from './config/languages'
 
 const EXAMPLE_PROMPTS = [
   'Hello! What is your name?',
@@ -17,15 +15,14 @@ const EXAMPLE_PROMPTS = [
 ]
 
 export default function App() {
-  const [mode, setMode] = useState('voice')       // 'chat' | 'voice'
-  const [langCode, setLangCode] = useState(DEFAULT_LANG)
+  const [mode, setMode] = useState('voice')   // 'chat' | 'voice'
 
-  const { messages, loading, error, sendMessage, clearChat } = useChat(langCode)
+  const { messages, loading, error, sendMessage, clearChat } = useChat()
   const { simplifyText, validateInput }                       = useBasicEnglish()
   const [convoMode, setConvoMode] = useState(false)
   const messagesEndRef = useRef(null)
-  const prevMsgLen     = useRef(1)
   const convoModeRef   = useRef(false)
+  const wasLoadingRef  = useRef(false)   // tracks loading transitions for TTS trigger
 
   useEffect(() => { convoModeRef.current = convoMode }, [convoMode])
 
@@ -52,14 +49,17 @@ export default function App() {
 
   useEffect(() => { startListeningRef.current = startListening }, [startListening])
 
-  // Speak every new assistant message
+  // Speak complete assistant message when streaming finishes (loading: true→false)
+  // Only in convo mode — avoids speaking while user is just reading the chat
   useEffect(() => {
     if (!supported.synthesis) return
-    if (messages.length <= prevMsgLen.current) { prevMsgLen.current = messages.length; return }
-    prevMsgLen.current = messages.length
+    if (loading) { wasLoadingRef.current = true; return }
+    if (!wasLoadingRef.current) return       // wasn't loading, no new message
+    wasLoadingRef.current = false
+    if (!convoModeRef.current) return        // only speak when convo mode is active
     const last = messages[messages.length - 1]
-    if (last?.role === 'assistant') speak(last.content)
-  }, [messages, supported.synthesis, speak])
+    if (last?.role === 'assistant' && last.content) speak(last.content)
+  }, [loading, messages, supported.synthesis, speak])
 
   // Scroll to bottom
   useEffect(() => {
@@ -88,12 +88,10 @@ export default function App() {
 
   return (
     <>
-    {/* ── Mode toggle bar ── */}
+    {/* ── Top bar ── */}
     <div className="fixed top-0 left-0 right-0 z-50 flex items-center justify-between px-4 py-2 parlare-topbar">
-      {/* Logo */}
       <img src={logo} alt="Parlare" className="h-8 w-8 rounded-lg object-cover" />
 
-      {/* Tabs */}
       <div className="flex gap-2">
         <button
           onClick={() => setMode('chat')}
@@ -115,36 +113,20 @@ export default function App() {
         </button>
       </div>
 
-      {/* Idioma activo — indicador */}
-      <div className="text-lg w-8 text-center">
-        {LANGUAGES[langCode]?.flag}
-      </div>
+      {/* English flag indicator */}
+      <div className="text-lg w-8 text-center">🇬🇧</div>
     </div>
 
+    {/* ── Voice mode ── */}
     {mode === 'voice' && (
       <div className="pt-12 parlare-bg min-h-screen flex flex-col items-center px-4">
-        {/* Picker encima de la card de voz */}
-        <div className="w-full max-w-sm mt-4 mb-3 parlare-card rounded-3xl p-4 parlare-glow-purple">
-          <LanguagePicker
-            selected={langCode}
-            onChange={setLangCode}
-          />
-        </div>
-        <VoiceUI langCode={langCode} />
+        <VoiceUI />
       </div>
     )}
 
+    {/* ── Chat mode ── */}
     {mode === 'chat' && (
     <div className="pt-12 parlare-bg flex flex-col items-center p-4">
-      {/* Picker encima de la card de chat — solo antes de empezar */}
-      {messages.length <= 1 && !loading && (
-        <div className="w-full max-w-md mb-3 parlare-card rounded-3xl p-4 parlare-glow-purple">
-          <LanguagePicker
-            selected={langCode}
-            onChange={(code) => { setLangCode(code); clearChat() }}
-          />
-        </div>
-      )}
       <div className="w-full max-w-md parlare-card rounded-3xl shadow-2xl overflow-hidden flex flex-col parlare-glow-purple"
            style={{ height: '90vh', maxHeight: '700px' }}>
 
@@ -154,7 +136,7 @@ export default function App() {
             <img src={logo} alt="Parlare" className="w-10 h-10 rounded-xl object-cover" />
             <div>
               <h1 className="parlare-title-gradient text-base">Parlare</h1>
-              <p className="text-xs" style={{ color: 'rgba(160,140,210,0.7)' }}>Basic Level · A1-A2</p>
+              <p className="text-xs" style={{ color: 'rgba(160,140,210,0.7)' }}>English · A1-A2</p>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -175,7 +157,7 @@ export default function App() {
           </div>
         </div>
 
-        {/* Mic error warning */}
+        {/* Mic error */}
         {micError && (
           <div className="px-4 py-2 text-xs text-center"
                style={{ background: 'rgba(255,107,0,0.1)', borderBottom: '1px solid rgba(255,107,0,0.2)', color: '#FF8C42' }}>
@@ -214,7 +196,7 @@ export default function App() {
              style={{ background: 'rgba(0,0,0,0.15)' }}>
           {messages.map((msg) => <ChatMessage key={msg.id} message={msg} />)}
 
-          {loading && (
+          {loading && messages[messages.length - 1]?.role !== 'assistant' && (
             <div className="flex justify-start mb-3 message-appear">
               <div className="w-8 h-8 rounded-full flex items-center justify-center text-sm mr-2 flex-shrink-0"
                    style={{ background: 'linear-gradient(135deg,#7B2FFF,#FF2D9B)' }}>🎓</div>
@@ -238,7 +220,7 @@ export default function App() {
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Example prompts */}
+        {/* Example prompts — only before first message */}
         {messages.length <= 1 && !loading && (
           <div className="px-4 pb-3 pt-3" style={{ borderTop: '1px solid rgba(123,47,255,0.15)' }}>
             <p className="text-xs text-center mb-2" style={{ color: 'rgba(160,140,210,0.5)' }}>Try saying:</p>
